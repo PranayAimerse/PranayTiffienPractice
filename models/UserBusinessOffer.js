@@ -1,0 +1,257 @@
+"use strict";
+const { Sequelize, DataTypes } = require("sequelize");
+const path = require("path");
+const fs = require("fs");
+const { generateUniqueToken, generateSlug } = require("../utils/helperMethod");
+const { GET_LIST } = require("../config/constant");
+const { timeStamp } = require("console");
+
+module.exports = (sequelize, DataTypes) => {
+  class UserBusinessOffer extends Sequelize.Model {
+    static associate(models) {
+      // Define associations here
+      UserBusinessOffer.belongsTo(models.User, {
+        foreignKey: "order_by",
+        as: "orderByUser",
+      });
+      UserBusinessOffer.belongsTo(models.UserBusiness, {
+        foreignKey: "business_id",
+        as: "business",
+      });
+      UserBusinessOffer.belongsTo(models.User, {
+        foreignKey: "updated_by",
+        as: "updatedByUser",
+      });
+      UserBusinessOffer.belongsTo(models.User, {
+        foreignKey: "created_by",
+        as: "createdByUser",
+      });
+    }
+
+    static async getBySlug(slug, loginUserId = 0, loginUserType = null) {
+      try {
+        let record = await this.findOne({ where: { slug } });
+        if (record) {
+        }
+        return record;
+      } catch (error) {
+        throw new Error(`Error fetching data by ID: ${error.message}`);
+        return null;
+      }
+    }
+    static async getById(id, loginUserId = 0, loginUserType = null) {
+      try {
+        let record = await this.findByPk(id);
+        if (record) {
+          if (record?.options) {
+            record.options = JSON.parse(record.options);
+          }
+        }
+        return record;
+      } catch (error) {
+        throw new Error(`Error fetching data by ID: ${error.message}`);
+        return null;
+      }
+    }
+    static async getByKey(
+      requiredValueType = GET_LIST,
+      keyValueSet = null,
+      inKeyValueSet = null,
+      notInKeyValueSet = null,
+      dataLimit = 10,
+      dataOffset = 0,
+      orderBy = "id",
+      orderType = "desc",
+      loginUserId = 0,
+      loginUserType = null
+    ) {
+      try {
+        const where = {
+          ...(keyValueSet || {}),
+          // Add the `whereIn` conditions to the query if they exist
+          ...Object.keys(inKeyValueSet || {}).reduce((acc, column) => {
+            acc[column] = { [Sequelize.Op.in]: inKeyValueSet[column] };
+            return acc;
+          }, {}),
+          // Add the `whereNotIn` conditions to the query if they exist
+          ...Object.keys(notInKeyValueSet || {}).reduce((acc, column) => {
+            acc[column] = { [Sequelize.Op.notIn]: notInKeyValueSet[column] };
+            return acc;
+          }, {})
+        };
+        const options = {
+          where: { ...where },
+          limit: dataLimit || 10, // Pagination limit
+          offset: (dataOffset || 0) * (dataLimit || 10), // Pagination offset
+          order: orderBy ? [[orderBy, orderType]] : [] // Sorting order (default to ASC)
+        };
+
+        // Combine all conditions using `Op.or`
+        let results = null;
+        if (requiredValueType === GET_LIST) { 
+          results = await this.findAll(options);
+        } else {
+          results = await this.findOne({ where: { ...where } });
+          // results = await this.getById(result?.id, loginUserId, loginUserType);
+        }
+
+        return results;
+      } catch (error) {
+        throw new Error(`Error during search: ${error.message}`);
+      }
+    }
+
+    static getColumnNames() {
+      return Object.keys(this.getAttributes());
+    }
+    static async getFullById(id, loginUserId = 0, loginUserType = null) {
+      try {
+        let record = await this.getById(id, loginUserId, loginUserType);
+        if (record) {
+          // record.unknown="";
+        }
+        return record;
+      } catch (error) {
+        throw new Error(`Error fetching data by ID: ${error.message}`);
+        return null;
+      }
+    }
+    static async filterValidAttributes(data) {
+      const validAttributes = await this.getColumnNames();
+      return Object.keys(data).reduce((filtered, key) => {
+        if (validAttributes.includes(key)) {
+          filtered[key] = data[key];
+        }
+        return filtered;
+      }, {});
+    }
+
+    static async insertData(dataTemp, loginUserId = 0, loginUserType = null) {
+      try {
+        const token = await generateUniqueToken(this, "AO");
+        const slug = await generateSlug(
+          this,
+          dataTemp?.title || "admin-offer-" + token
+        );
+        // Create a new user
+        let tempUpdateDataset = { ...dataTemp, token: token, slug: slug };
+
+        if (loginUserId && loginUserType) {
+          tempUpdateDataset = {
+            ...tempUpdateDataset,
+            created_by: loginUserId,
+            created_user_type: loginUserType,
+            updated_by: loginUserId,
+            updated_user_type: loginUserType
+          };
+        }
+        const dataSet = await this.filterValidAttributes(tempUpdateDataset);
+
+        const insertData = await this.create(dataSet);
+        if (insertData) {
+          console.log("Data created successfully:", insertData?.token);
+          return this.getFullById(insertData?.id, loginUserId, loginUserType);
+        } else {
+          console.log("Data created successfully:", insertData?.token);
+        }
+      } catch (error) {
+        console.error("Error inserting data:", error);
+        throw new Error(`Error updating data: ${error.message}`);
+        return null;
+      }
+    }
+
+    static async updateData(data, id, loginUserId = 0, loginUserType = null) {
+      try {
+        const oldData = await this.findByPk(id);
+        if (oldData) {
+          let tempUpdateDataset = { ...oldData, ...data };
+          if (loginUserId && loginUserType) {
+            tempUpdateDataset = {
+              ...tempUpdateDataset,
+              updated_by: loginUserId,
+              updated_user_type: loginUserType
+            };
+          }
+          const dataSet = await this.filterValidAttributes(tempUpdateDataset);
+          const result = await oldData?.update(dataSet);
+          if (result) {
+          }
+          return await this.getById(id, loginUserId, loginUserType);
+        } else {
+          return null;
+        }
+      } catch (error) {
+        throw new Error(`Error updating data: ${error.message}`);
+      }
+    }
+
+    static async deleteData(id) {
+      try {
+        const data = await this.findByPk(id);
+        if (data) {
+          // Delete the single record matching the condition
+          const result = await this.destroy({
+            where: { id: data?.id },
+            limit: 1
+          });
+          if (result) {
+            return true; // Record successfully deleted
+          }
+        }
+        throw new Error("No records found matching the specified conditions.");
+        return null;
+      } catch (error) {
+        throw new Error(`Error deleting record: ${error.message}`);
+      }
+    }
+  }
+
+  UserBusinessOffer.init(
+    {
+      token: { type: DataTypes.STRING, allowNull: true },
+      slug: { type: DataTypes.STRING, allowNull: true },
+      business_id: { type: DataTypes.STRING, allowNull: true },
+      order_by:{type:DataTypes.STRING,allowNull:true},
+      token_business: { type: DataTypes.STRING, defaultValue: null },
+      url_image: { type: DataTypes.STRING, defaultValue: null },
+      title: { type: DataTypes.STRING, allowNull: true },
+      description: { type: DataTypes.STRING, allowNull: true },
+      code: { type: DataTypes.STRING, allowNull: true },
+      discount: { type: DataTypes.STRING, allowNull: true },
+      discount_type: { type: DataTypes.ENUM("fixed", "percentage"), allowNull: true },
+      date_start: { type: DataTypes.DATE, defaultValue: Sequelize.NOW },
+      date_end: { type: DataTypes.DATE, defaultValue: Sequelize.NOW },
+      limit_order_value_min: { type: DataTypes.INTEGER, allowNull: true },
+      limit_order_value_max: { type: DataTypes.INTEGER, allowNull: true },
+      limit_per_user: { type: DataTypes.INTEGER, allowNull: true },
+      limit_count_user_max: { type: DataTypes.INTEGER, allowNull: true },
+      limit_count_user_used: { type: DataTypes.INTEGER, allowNull: true },
+      terms_conditions: { type: DataTypes.STRING, allowNull: true },
+      status: { type: DataTypes.ENUM("upcoming", "active", "disable", "expire"), allowNull: true },
+      updated_user_type: { type: DataTypes.STRING, allowNull: true },
+      created_user_type: { type: DataTypes.STRING, allowNull: true },
+    },
+    {
+      sequelize,
+      timestamps :false,
+      modelName: "UserBusinessOffer",
+      tableName: "userbusinessoffers",
+      
+      // hooks: {
+      //   afterCreate: async (userBusinessOffer) => {
+      //     userBusinessOffer.token = CreateToken("userBusinessOffer");
+      //     await userBusinessOffer.save();
+      //   },
+      //   afterSave: async (userBusinessOffer) => {
+      //     if (userBusinessOffer.title && !userBusinessOffer.slug) {
+      //       userBusinessOffer.slug = CreateSlug(userBusinessOffer.title);
+      //       await userBusinessOffer.save();
+      //     }
+      //   },
+      // },
+    }
+  );
+
+  return UserBusinessOffer;
+};
